@@ -10,6 +10,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///users.db"
 app.config["SECRET_KEY"] = "your_secret_key"  # Change this to a secure, random string
 db = SQLAlchemy(app)
 
+sqlinjection = True
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -45,12 +46,17 @@ def login():
         username = data["username"]
         password = data["password"]
 
-        # This creates an SQL injection vulnerability.
-        query = text(f"SELECT * FROM user WHERE username='{username}' AND password='{password}'")
-        result = db.session.execute(query)
-        user = result.first()
-        # This fixes the SQL injection vulnerability.
-        # user = User.query.filter_by(username=username, password=password).first()
+        user = None
+        if sqlinjection:
+            # This creates an SQL injection vulnerability.
+            query = text(
+                f"SELECT * FROM user WHERE username='{username}' AND password='{password}'"
+            )
+            result = db.session.execute(query)
+            user = result.first()
+        else:
+            # This fixes the SQL injection vulnerability.
+            user = User.query.filter_by(username=username, password=password).first()
 
         if user:
             session["username"] = username
