@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h2>Chat with GPT-3!</h2>
+
+<form action="/chat" method="post">
+  <div class="container">
+    <label for="message"><b>Message</b></label>
+    <input type="text" placeholder="Enter your message" name="message" required>
+
+    <button type="submit">Send</button>
+  </div>
+</form>
+
+{% if chat %}
+    <h2>Chat history:</h2>
+    <ul>
+    {% for message in chat %}
+        {% if message.role == 'user' %}
+            <li>👤 {{ message.content }}</li>
+        {% else %}
+            <li>🤖 {{ message.content }}</li>
+        {% endif %}
+    {% endfor %}
+    </ul>
+{% endif %}
+<a href="/logout">Logout</a>
+
+</body>
+</html>
