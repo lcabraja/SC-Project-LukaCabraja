@@ -12,6 +12,7 @@ from flask import (
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
+from flask_wtf.csrf import CSRFProtect
 from flask_jwt_extended import (
     JWTManager,
     create_access_token,
@@ -35,11 +36,15 @@ app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
 app.config["JWT_COOKIE_SECURE"] = False
 app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(seconds=10)
+app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=60)
+app.config["WTF_CSRF_ENABLED"] = True
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
+csrf = CSRFProtect(app)
 
 sqlinjection = False
+owaspzap = True
 
 
 class User(db.Model):
@@ -122,6 +127,24 @@ def expired_token_callback(jwt_header, jwt_payload):
     return redirect(url_for("refresh"))
 
 
+@app.after_request
+def add_security_headers(response):
+    if owaspzap:
+        response.headers['Server'] = 'Hidden'
+        # response.headers["Content-Security-Policy"] = "default-src 'self'"
+        # response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' https://mitsuha.tailf8ebe.ts.net/"
+        response.headers['Content-Security-Policy'] = "default-src 'self' https://mitsuha.tailf8ebe.ts.net http://host.docker.internal:5000 https://localhost:5000"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers['Permissions-Policy'] = "geolocation=(), midi=(), notifications=(), push=(), sync-xhr=(), microphone=(), camera=(), magnetometer=(), gyroscope=(), speaker=(self), vibrate=(), fullscreen=(self), payment=()"
+        if request.path == "/login" or request.path == "/register":
+            response.cache_control.max_age = 300
+        else:
+            response.cache_control.no_store = True
+    return response
+
+
 @app.route("/refresh", methods=["GET"])
 @jwt_required(refresh=True, verify_type=False)
 def refresh():
@@ -194,7 +217,9 @@ def chat():
 
     refresh = session.get("refresh", False)
     session.pop("refresh", None)
-    resp = make_response(render_template("chat.html", chat=session["chat"], refresh=refresh))
+    resp = make_response(
+        render_template("chat.html", chat=session["chat"], refresh=refresh)
+    )
 
     token_expiry = get_jwt()["exp"]
     current_time = time.time()
