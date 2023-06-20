@@ -16,5 +16,11 @@
   </div>
 </form>
 
+{% if error %}
+  <div style="color: red; font-weight: 600;">
+    {{ error }}
+  </div>
+{% endif %}
+
 </body>
 </html>
