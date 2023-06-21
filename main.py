@@ -1,4 +1,5 @@
 from datetime import timedelta
+import hashlib
 import time
 from flask import (
     Flask,
@@ -11,8 +12,7 @@ from flask import (
     url_for,
 )
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import text
-from flask_wtf.csrf import CSRFProtect
+from sqlalchemy import LargeBinary, text
 from flask_jwt_extended import (
     JWTManager,
     create_access_token,
@@ -34,14 +34,17 @@ app.config["SECRET_KEY"] = "your_secret_key"
 app.config["JWT_SECRET_KEY"] = "your_jwt_secret_key"
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
 app.config["JWT_COOKIE_SECURE"] = False
-app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(seconds=10)
 app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=60)
-app.config["WTF_CSRF_ENABLED"] = True
+app.config["JWT_COOKIE_CSRF_PROTECT"] = False
+
+for key in app.config:
+    print(f"{key} = {app.config[key]}")
+
+SERIALIZED_DATA_DIR = "./data"
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
-csrf = CSRFProtect(app)
 
 sqlinjection = False
 owaspzap = True
@@ -51,66 +54,69 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(80), nullable=False)
-
-
+    chat_hash = db.Column(LargeBinary(64), nullable=True)  # This will store the hash
+    
 @app.before_first_request
 def create_tables():
     db.create_all()
 
-
-@app.route("/register", methods=["GET", "POST"])
+@app.route("/register", methods=["GET"])
 def register():
-    if request.method == "POST":
-        username = request.form["username"]
-        password = request.form["password"]
+    return render_template("register.html")
 
-        if sqlinjection:
-            # This creates an SQL injection vulnerability.
-            query = text(
-                f"INSERT INTO user (username, password) VALUES ('{username}', '{password}')"
-            )
-            db.session.execute(query)
-        else:
-            # This is the safe way to insert a new user using SQLAlchemy's ORM.
-            user = User(username=username, password=password)
-            db.session.add(user)
 
-        db.session.commit()
+@app.route("/register", methods=["POST"])
+def register_post():
+    username = request.form["username"]
+    password = request.form["password"]
 
-        return redirect(url_for("login"))
+    if sqlinjection:
+        # This creates an SQL injection vulnerability.
+        query = text(
+            f"INSERT INTO user (username, password) VALUES ('{username}', '{password}')"
+        )
+        db.session.execute(query)
     else:
-        return render_template("register.html")
+        # This is the safe way to insert a new user using SQLAlchemy's ORM.
+        user = User(username=username, password=password)
+        db.session.add(user)
+
+    db.session.commit()
+
+    return redirect(url_for("login"))
 
 
-@app.route("/login", methods=["GET", "POST"])
+@app.route("/login", methods=["GET"])
 def login():
-    if request.method == "POST":
-        data = request.form
-        username = data["username"]
-        password = data["password"]
+    return render_template("login.html")
 
-        user = None
-        if sqlinjection:
-            query = text(
-                f"SELECT * FROM user WHERE username='{username}' AND password='{password}'"  # noqa: E501
-            )
-            result = db.session.execute(query)
-            user = result.first()
-        else:
-            user = User.query.filter_by(username=username, password=password).first()
 
-        if user:
-            resp = make_response(redirect(url_for("home")))
-            access_token = create_access_token(identity=username)
-            refresh_token = create_refresh_token(identity=username)
-            set_access_cookies(resp, access_token)
-            set_refresh_cookies(resp, refresh_token)
-            return resp
-        else:
-            session["error"] = "Invalid credentials."
-            return render_template("login"), 401
+@app.route("/login", methods=["POST"])
+def login_post():
+    data = request.form
+    username = data["username"]
+    password = data["password"]
+
+    user = None
+    if sqlinjection:
+        query = text(
+            f"SELECT * FROM user WHERE username='{username}' AND password='{password}'"  # noqa: E501
+        )
+        result = db.session.execute(query)
+        user = result.first()
     else:
-        return render_template("login.html")
+        user = User.query.filter_by(username=username, password=password).first()
+
+    if user:
+        resp = make_response(redirect(url_for("home")))
+        access_token = create_access_token(identity=username)
+        refresh_token = create_refresh_token(identity=username)
+        set_access_cookies(resp, access_token)
+        set_refresh_cookies(resp, refresh_token)
+        return resp
+    else:
+        session["error"] = "Invalid credentials."
+        return render_template("login.html", error=session["error"]), 401
 
 
 @app.route("/logout", methods=["GET"])
@@ -130,14 +136,12 @@ def expired_token_callback(jwt_header, jwt_payload):
 @app.after_request
 def add_security_headers(response):
     if owaspzap:
-        response.headers['Server'] = 'Hidden'
-        # response.headers["Content-Security-Policy"] = "default-src 'self'"
-        # response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' https://mitsuha.tailf8ebe.ts.net/"
-        response.headers['Content-Security-Policy'] = "default-src 'self' https://mitsuha.tailf8ebe.ts.net http://host.docker.internal:5000 https://localhost:5000"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["X-Frame-Options"] = "SAMEORIGIN"
-        response.headers['Permissions-Policy'] = "geolocation=(), midi=(), notifications=(), push=(), sync-xhr=(), microphone=(), camera=(), magnetometer=(), gyroscope=(), speaker=(self), vibrate=(), fullscreen=(self), payment=()"
+        # response.headers["Server"] = "Hidden"
+        # response.headers["Content-Security-Policy"] = "default-src 'self' https://mitsuha.tailf8ebe.ts.net http://host.docker.internal:5000 https://localhost:5000"
+        # response.headers["X-Content-Type-Options"] = "nosniff"
+        # response.headers["X-XSS-Protection"] = "1; mode=block"
+        # response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        # response.headers["Permissions-Policy"] = "geolocation=(), midi=(), notifications=(), push=(), sync-xhr=(), microphone=(), camera=(), magnetometer=(), gyroscope=(), speaker=(self), vibrate=(), fullscreen=(self), payment=()"
         if request.path == "/login" or request.path == "/register":
             response.cache_control.max_age = 300
         else:
@@ -170,13 +174,28 @@ def home():
 @jwt_required()
 def chat():
     username = get_jwt_identity()
-    filename = os.path.join("./data", f"{username}.json")
+    user = User.query.filter_by(username=username).first() # Get the user
+    filename = os.path.join(SERIALIZED_DATA_DIR, f"{username}.json")
     if os.path.exists(filename):
+        # Calculate the hash of the file
+        hasher = hashlib.sha256()
+        with open(filename, "rb") as f:
+            buf = f.read()
+            hasher.update(buf)
+        current_hash = hasher.digest()  # This is the current hash of the file
+
+        # If the hash in the database and the calculated hash don't match,
+        # it means the file may have been tampered with
+        if user.chat_hash != current_hash:
+            return "Error: chat data file integrity could not be verified.", 500
+
+        # Load the chat data if the hashes match
         with open(filename, "r") as f:
             chat_data = json.load(f)
             session["chat"] = chat_data.get("messages", [])
     else:
         session["chat"] = []
+
 
     if request.method == "POST":
         message = request.form["message"]
@@ -210,10 +229,23 @@ def chat():
             "messages": session["chat"],
         }
 
-        if not os.path.exists("./data"):
-            os.makedirs("./data")
-        with open(os.path.join("./data", f"{username}.json"), "w") as f:
+        if not os.path.exists(SERIALIZED_DATA_DIR):
+            os.makedirs(SERIALIZED_DATA_DIR)
+        
+        userjson = f"{username}.json"
+        with open(os.path.join(SERIALIZED_DATA_DIR, userjson), "w") as f:
             json.dump(chat_data, f)
+        
+        hasher = hashlib.sha256()
+        with open(os.path.join(SERIALIZED_DATA_DIR, userjson), "rb") as f:
+            buf = f.read()
+            hasher.update(buf)
+        file_hash = hasher.digest()  # This is the hash of the file
+
+        # Update the user record with the hash
+        user = User.query.filter_by(username=username).first()
+        user.chat_hash = file_hash
+        db.session.commit()
 
     refresh = session.get("refresh", False)
     session.pop("refresh", None)
@@ -257,4 +289,4 @@ def demonstration_jwt():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=5002)
