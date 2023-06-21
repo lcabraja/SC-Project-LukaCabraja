@@ -1,5 +1,6 @@
 from datetime import timedelta
 import hashlib
+from tabnanny import check
 import time
 from flask import (
     Flask,
@@ -24,6 +25,7 @@ from flask_jwt_extended import (
     set_refresh_cookies,
     unset_jwt_cookies,
 )
+from werkzeug.security import generate_password_hash, check_password_hash
 import requests
 import os
 import json
@@ -38,8 +40,7 @@ app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(seconds=10)
 app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=60)
 app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 
-for key in app.config:
-    print(f"{key} = {app.config[key]}")
+print("=====================================================================")
 
 SERIALIZED_DATA_DIR = "./data"
 
@@ -52,8 +53,8 @@ owaspzap = True
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password = db.Column(db.String(80), nullable=False)
+    username = db.Column(db.String(256), unique=True, nullable=False)
+    password = db.Column(db.String(256), nullable=False)
     chat_hash = db.Column(LargeBinary(64), nullable=True)  # This will store the hash
     
 @app.before_first_request
@@ -69,16 +70,19 @@ def register():
 def register_post():
     username = request.form["username"]
     password = request.form["password"]
+    hashed_password = generate_password_hash(password)
 
     if sqlinjection:
         # This creates an SQL injection vulnerability.
         query = text(
-            f"INSERT INTO user (username, password) VALUES ('{username}', '{password}')"
+            f"INSERT INTO user (username, password) VALUES ('{username}', '{hashed_password}')"
         )
         db.session.execute(query)
+
     else:
         # This is the safe way to insert a new user using SQLAlchemy's ORM.
-        user = User(username=username, password=password)
+        user = User(username=username, password=hashed_password)
+        print(len(hashed_password))
         db.session.add(user)
 
     db.session.commit()
@@ -100,14 +104,14 @@ def login_post():
     user = None
     if sqlinjection:
         query = text(
-            f"SELECT * FROM user WHERE username='{username}' AND password='{password}'"  # noqa: E501
+            f"SELECT * FROM user WHERE username='{username}'"  # noqa: E501
         )
         result = db.session.execute(query)
         user = result.first()
     else:
-        user = User.query.filter_by(username=username, password=password).first()
+        user = User.query.filter_by(username=username).first()
 
-    if user:
+    if user and check_password_hash(user.password, password):
         resp = make_response(redirect(url_for("home")))
         access_token = create_access_token(identity=username)
         refresh_token = create_refresh_token(identity=username)
@@ -136,12 +140,12 @@ def expired_token_callback(jwt_header, jwt_payload):
 @app.after_request
 def add_security_headers(response):
     if owaspzap:
-        # response.headers["Server"] = "Hidden"
-        # response.headers["Content-Security-Policy"] = "default-src 'self' https://mitsuha.tailf8ebe.ts.net http://host.docker.internal:5000 https://localhost:5000"
-        # response.headers["X-Content-Type-Options"] = "nosniff"
-        # response.headers["X-XSS-Protection"] = "1; mode=block"
-        # response.headers["X-Frame-Options"] = "SAMEORIGIN"
-        # response.headers["Permissions-Policy"] = "geolocation=(), midi=(), notifications=(), push=(), sync-xhr=(), microphone=(), camera=(), magnetometer=(), gyroscope=(), speaker=(self), vibrate=(), fullscreen=(self), payment=()"
+        response.headers["Server"] = "Hidden"
+        response.headers["Content-Security-Policy"] = "default-src 'self' https://mitsuha.tailf8ebe.ts.net http://host.docker.internal:5000 https://localhost:5000"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["Permissions-Policy"] = "geolocation=(), midi=(), notifications=(), push=(), sync-xhr=(), microphone=(), camera=(), magnetometer=(), gyroscope=(), speaker=(self), vibrate=(), fullscreen=(self), payment=()"
         if request.path == "/login" or request.path == "/register":
             response.cache_control.max_age = 300
         else:
